@@ -40,7 +40,8 @@ SDClass theSD;
 #define CAM_CLIP_W 224
 #define CAM_CLIP_H 224
 
-#define LINE_THICKNESS 5
+#define LINE_THICKNESS (5)
+#define BAUDRATE                (115200)
 
 Adafruit_ILI9341 tft = Adafruit_ILI9341(&SPI, TFT_DC, TFT_CS, TFT_RST);
 
@@ -51,6 +52,48 @@ DNNVariable input(3 * DNN_IMG_W * DNN_IMG_H);
 
 static uint8_t const label[2] = { 0, 1 };
 
+// カメラエラーを表示する関数
+void printError(enum CamErr err)
+{
+  Serial.print("Error: ");
+  switch (err)
+    {
+      case CAM_ERR_NO_DEVICE:
+        Serial.println("No Device");
+        break;
+      case CAM_ERR_ILLEGAL_DEVERR:
+        Serial.println("Illegal device error");
+        break;
+      case CAM_ERR_ALREADY_INITIALIZED:
+        Serial.println("Already initialized");
+        break;
+      case CAM_ERR_NOT_INITIALIZED:
+        Serial.println("Not initialized");
+        break;
+      case CAM_ERR_NOT_STILL_INITIALIZED:
+        Serial.println("Still picture not initialized");
+        break;
+      case CAM_ERR_CANT_CREATE_THREAD:
+        Serial.println("Failed to create thread");
+        break;
+      case CAM_ERR_INVALID_PARAM:
+        Serial.println("Invalid parameter");
+        break;
+      case CAM_ERR_NO_MEMORY:
+        Serial.println("No memory");
+        break;
+      case CAM_ERR_USR_INUSED:
+        Serial.println("Buffer already in use");
+        break;
+      case CAM_ERR_NOT_PERMITTED:
+        Serial.println("Operation not permitted");
+        break;
+      default:
+        break;
+    }
+}
+
+// LCDに文字列を表示する関数
 void putStringOnLcd(String str, int color) {
   int len = str.length();
   tft.fillRect(0, 224, 320, 240, ILI9341_BLACK);
@@ -62,6 +105,7 @@ void putStringOnLcd(String str, int color) {
   tft.println(str);
 }
 
+// 画像に枠を描画する関数
 void drawBox(uint16_t* imgBuf) {
   /* Draw target line */
   for (int x = CAM_CLIP_X; x < CAM_CLIP_X + CAM_CLIP_W; ++x) {
@@ -78,6 +122,7 @@ void drawBox(uint16_t* imgBuf) {
   }
 }
 
+// カメラ画像取得時のコールバック関数
 void CamCB(CamImage img) {
 
   if (!img.isAvailable()) {
@@ -85,6 +130,7 @@ void CamCB(CamImage img) {
     return;
   }
 
+  // 画像をクリップしてリサイズ
   CamImage small;
   CamErr err = img.clipAndResizeImageByHW(small, CAM_CLIP_X, CAM_CLIP_Y, CAM_CLIP_X + CAM_CLIP_W - 1, CAM_CLIP_Y + CAM_CLIP_H - 1, DNN_IMG_W, DNN_IMG_H);
   if (!small.isAvailable()) {
@@ -92,9 +138,11 @@ void CamCB(CamImage img) {
     return;
   }
 
+  // 画像フォーマットをRGB565に変換
   small.convertPixFormat(CAM_IMAGE_PIX_FMT_RGB565);
   uint16_t* temp = (uint16_t*)small.getImgBuff();
 
+  // DNNRTに入力するためのデータを準備
   float* r = input.data();
   float* g = r + DNN_IMG_W * DNN_IMG_H;
   float* b = g + DNN_IMG_W * DNN_IMG_H;
@@ -105,7 +153,7 @@ void CamCB(CamImage img) {
     ++temp;
   }
 
-
+  // DNNRTで推論を実行
   String gStrResult = "?";
   dnnrt.inputVariable(input, 0);
   dnnrt.forward();
@@ -117,40 +165,67 @@ void CamCB(CamImage img) {
     analogWrite(3, 130);
   }
 
+  // 推論結果を表示
   if (index < 2) {
     gStrResult = String(label[index]) + String(":") + String(output[index]);
+    Serial.println("L:0,R:0");
   } else {
     gStrResult = String("?:") + String(output[index]);
   }
   Serial.println(gStrResult);
 
+  // 画像をRGB565フォーマットに変換
   img.convertPixFormat(CAM_IMAGE_PIX_FMT_RGB565);
   uint16_t* imgBuf = (uint16_t*)img.getImgBuff();
 
+  // 画像に枠を描画
   drawBox(imgBuf);
   tft.drawRGBBitmap(0, 0, (uint16_t*)img.getImgBuff(), 320, 224);
   putStringOnLcd(gStrResult, ILI9341_YELLOW);
 }
 
-
+// 初期設定
 void setup() {
-  Serial.begin(115200);
-
+  Serial.begin(BAUDRATE);
   tft.begin();
   tft.setRotation(3);
 
+  CamErr err;
+
+  // SDカードの初期化
   while (!theSD.begin()) { putStringOnLcd("Insert SD card", ILI9341_RED); }
 
+  // DNNRTモデルファイルを開く
   File nnbfile = theSD.open("model.nnb");
 
+  // DNNRTを初期化
   int ret = dnnrt.begin(nnbfile);
   if (ret < 0) {
     putStringOnLcd("dnnrt.begin failed" + String(ret), ILI9341_RED);
     return;
   }
 
+  // カメラの初期化とストリーミング開始
   theCamera.begin();
   theCamera.startStreaming(true, CamCB);
+  Serial.println("Set Auto white balance parameter");
+  err = theCamera.setAutoWhiteBalanceMode(CAM_WHITE_BALANCE_DAYLIGHT);
+  if (err != CAM_ERR_SUCCESS)
+    {
+      printError(err);
+    }
+
+  // 静止画フォーマットを設定
+  Serial.println("Set still picture format");
+  err = theCamera.setStillPictureImageFormat(
+     CAM_IMGSIZE_QUADVGA_H,
+     CAM_IMGSIZE_QUADVGA_V,
+     CAM_IMAGE_PIX_FMT_JPG);
+  if (err != CAM_ERR_SUCCESS)
+    {
+      printError(err);
+    }
 }
 
+// メインループ
 void loop() {}
