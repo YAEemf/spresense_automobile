@@ -1,6 +1,6 @@
 /*
- *  Spresense_gnss_simple.ino - Simplified gnss example application
- *  Copyright 2019-2021 Sony Semiconductor Solutions Corporation
+ *  camera.ino - Simple camera example sketch
+ *  Copyright 2018, 2022 Sony Semiconductor Solutions Corporation
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Lesser General Public
@@ -15,6 +15,9 @@
  *  You should have received a copy of the GNU Lesser General Public
  *  License along with this library; if not, write to the Free Software
  *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+ *
+ *  This is a test app for the camera library.
+ *  This library can only be used on the Spresense with the FCBGA chip package.
  */
 
 #include <Camera.h>
@@ -22,7 +25,7 @@
 #include <EEPROM.h>
 #include <DNNRT.h>
 #include "Adafruit_ILI9341.h"
-
+#include <asmp/mpshm.h>
 #include <SDHCI.h>
 SDClass theSD;
 
@@ -41,15 +44,14 @@ SDClass theSD;
 #define CAM_CLIP_H 224
 
 #define LINE_THICKNESS (5)
-#define BAUDRATE                (115200)
+#define BAUDRATE (115200)
 
 Adafruit_ILI9341 tft = Adafruit_ILI9341(&SPI, TFT_DC, TFT_CS, TFT_RST);
-
-uint8_t buf[DNN_IMG_W * DNN_IMG_H];
 
 DNNRT dnnrt;
 DNNVariable input(3 * DNN_IMG_W * DNN_IMG_H);
 
+// const size_t SHM_SIZE = 1024 * 256;
 static uint8_t const label[2] = { 0, 1 };
 
 // カメラエラーを表示する関数
@@ -124,6 +126,7 @@ void drawBox(uint16_t* imgBuf) {
 
 // カメラ画像取得時のコールバック関数
 void CamCB(CamImage img) {
+  delay(1);
 
   if (!img.isAvailable()) {
     Serial.println("Image is not available. Try again");
@@ -157,18 +160,18 @@ void CamCB(CamImage img) {
   String gStrResult = "?";
   dnnrt.inputVariable(input, 0);
   dnnrt.forward();
+
   DNNVariable output = dnnrt.outputVariable(0);
   int index = output.maxIndex();
   if (output[1] > 0.8) {
-    analogWrite(3, 0);
+    Serial.println("L:0,R:0");  //RP2040 BLDC Driver Stop
   } else {
-    analogWrite(3, 130);
+    //continue move BLDC
   }
 
   // 推論結果を表示
   if (index < 2) {
     gStrResult = String(label[index]) + String(":") + String(output[index]);
-    Serial.println("L:0,R:0");
   } else {
     gStrResult = String("?:") + String(output[index]);
   }
@@ -187,6 +190,10 @@ void CamCB(CamImage img) {
 // 初期設定
 void setup() {
   Serial.begin(BAUDRATE);
+  while (!Serial)
+    {
+      ; /* wait for serial port to connect. Needed for native USB port only */
+    }
   tft.begin();
   tft.setRotation(3);
 
@@ -195,36 +202,61 @@ void setup() {
   // SDカードの初期化
   while (!theSD.begin()) { putStringOnLcd("Insert SD card", ILI9341_RED); }
 
-  // DNNRTモデルファイルを開く
-  File nnbfile = theSD.open("model.nnb");
+  // SDカードからモデルファイルを開く
+  File nnbfile = theSD.open("model.nnb", FILE_READ);
+  if (!nnbfile) {
+    Serial.println("model.nnbファイルを開けませんでした");
+    return;
+  }
+  Serial.println("model.nnbファイルをオープンしました");
 
-  // DNNRTを初期化
+  // 念のためファイルポインタを先頭に戻す
+  if (!nnbfile.seek(0)) {
+    Serial.println("ファイルポインタの先頭への移動に失敗しました");
+  }
+
+  // ファイルサイズのチェック
+  size_t fileSize = nnbfile.size();
+  Serial.print("ファイルサイズ: ");
+  Serial.println(fileSize);
+  if (fileSize == 0) {
+    Serial.println("注意: ファイルサイズが0です。ファイルにデータがあるか確認してください。");
+    nnbfile.close();
+    return;
+  }
+  // if (fileSize > SHM_SIZE) {
+  //   Serial.println("model.nnbファイルが大きすぎます");
+  //   nnbfile.close();
+  //   return;
+  // }
+
   int ret = dnnrt.begin(nnbfile);
   if (ret < 0) {
     putStringOnLcd("dnnrt.begin failed" + String(ret), ILI9341_RED);
     return;
   }
 
-  // カメラの初期化とストリーミング開始
+  // HDRカメラ(CXD5602PWBCAM2W)の初期化とストリーミング開始
   theCamera.begin();
-  theCamera.startStreaming(true, CamCB);
+
+  // 静止画フォーマットを設定
+  Serial.println("Set still picture format");
+  // https://developer.sony.com/spresense/spresense-api-references-arduino/group__CAM__IMGSIZE.html
+  // err = theCamera.setStillPictureImageFormat(CAM_IMGSIZE_QUADVGA_H, CAM_IMGSIZE_QUADVGA_V, CAM_IMAGE_PIX_FMT_JPG, 11);
+  err = theCamera.setStillPictureImageFormat(CAM_IMGSIZE_QQVGA_H, CAM_IMGSIZE_QQVGA_V, CAM_IMAGE_PIX_FMT_JPG, 11);
+  if (err != CAM_ERR_SUCCESS)
+    {
+      printError(err);
+    }
+
   Serial.println("Set Auto white balance parameter");
   err = theCamera.setAutoWhiteBalanceMode(CAM_WHITE_BALANCE_DAYLIGHT);
   if (err != CAM_ERR_SUCCESS)
     {
       printError(err);
     }
-
-  // 静止画フォーマットを設定
-  Serial.println("Set still picture format");
-  err = theCamera.setStillPictureImageFormat(
-     CAM_IMGSIZE_QUADVGA_H,
-     CAM_IMGSIZE_QUADVGA_V,
-     CAM_IMAGE_PIX_FMT_JPG);
-  if (err != CAM_ERR_SUCCESS)
-    {
-      printError(err);
-    }
+  
+  theCamera.startStreaming(true, CamCB);
 }
 
 // メインループ
