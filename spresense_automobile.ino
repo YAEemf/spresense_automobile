@@ -53,7 +53,9 @@ Adafruit_ILI9341 tft = Adafruit_ILI9341(&SPI, TFT_DC, TFT_CS, TFT_RST);
 DNNRT dnnrt;
 DNNVariable input(3 * DNN_IMG_W * DNN_IMG_H);
 
-// const size_t SHM_SIZE = 1024 * 256;
+// RGB565->色成分変換の逆数を事前に計算
+const float inv31 = 1.0f / 31.0f;
+const float inv63 = 1.0f / 63.0f;
 static uint8_t const label[2] = { 0, 1 };
 bool d_flag = false;
 static float data[8][4];
@@ -131,8 +133,6 @@ void drawBox(uint16_t* imgBuf) {
 
 // カメラ画像取得時のコールバック関数
 void CamCB(CamImage img) {
-  delay(1);
-
   if (!img.isAvailable()) {
     Serial.println("Image is not available. Try again");
     return;
@@ -155,10 +155,10 @@ void CamCB(CamImage img) {
   float* g = r + DNN_IMG_W * DNN_IMG_H;
   float* b = g + DNN_IMG_W * DNN_IMG_H;
   for (int i = 0; i < DNN_IMG_W * DNN_IMG_H; ++i) {
-    *(r++) = (float)((*temp >> 11) & 0x1F) / 31.0;  // 0x1F = 31
-    *(g++) = (float)((*temp >> 5) & 0x3F) / 63.0;   // 0x3F = 64
-    *(b++) = (float)((*temp) & 0x1F) / 31.0;        // 0x1F = 31
-    ++temp;
+    uint16_t pixel = *temp++;
+    *r++ = ((pixel >> 11) & 0x1F) * inv31;
+    *g++ = ((pixel >> 5) & 0x3F) * inv63;
+    *b++ = (pixel & 0x1F) * inv31;
   }
 
   // DNNRTで推論を実行
@@ -168,7 +168,7 @@ void CamCB(CamImage img) {
 
   DNNVariable output = dnnrt.outputVariable(0);
   int index = output.maxIndex();
-  if (output[1] > 0.8 || d_flag) {
+  if (output[1] > 0.75 || d_flag) {
     Serial.println("L:0,R:0");  //RP2040 BLDC Driver Stop
   } else {
     //continue move BLDC
@@ -267,25 +267,25 @@ void setup() {
   theCamera.startStreaming(true, CamCB);
 }
 
-// TOF
+// ToF MM-TOF10-IS
 void loop() {
-  // 3D TOFセンサからデータを取得
+  // 3D ToFセンサからデータを取得
+  d_flag = false;
   MMToF10.get3d(ptr);
 
-  // 2次元配列内の各値をチェックし、閾値未満なら flag を立てる
-  for(int j = 0; j < 8; j++){
-    for(int i = 0; i < 4; i++){
-      if(data[j][i] < THRESHOLD) {
+  for (int j = 0; j < 8; j++){
+    for (int i = 0; i < 4; i++){
+      float distance = data[j][i];
+      printf("range[%d][%d] = %f [mm]\n", j, i, distance);
+      if(distance < THRESHOLD) {
         d_flag = true;
       }
-      printf("range[%d][%d] = %f [mm]\n", j, i, data[j][i]);
     }
   }
-
+  
   if(d_flag){
-    printf("警告: センサの距離が閾値(%f [mm])未満の値を検出しました！\n", THRESHOLD);
+    printf("センサの距離が閾値(%f [mm])未満の値を検出\n", THRESHOLD);
   }
   
-   printf("\n\n\n");
-   delay(500);
+  delay(500);
 }
