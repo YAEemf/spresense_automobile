@@ -35,8 +35,8 @@ SDClass theSD;
 #define TFT_RST 8
 #define TFT_DC 9
 
-#define DNN_IMG_W 28
-#define DNN_IMG_H 28
+#define DNN_IMG_W 56
+#define DNN_IMG_H 56
 #define CAM_IMG_W 320
 #define CAM_IMG_H 240
 #define CAM_CLIP_X 48
