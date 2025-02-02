@@ -26,7 +26,7 @@
 #include <EEPROM.h>
 #include <DNNRT.h>
 #include "Adafruit_ILI9341.h"
-#include <asmp/mpshm.h>
+#include <MP.h>
 #include <SDHCI.h>
 SDClass theSD;
 
@@ -131,11 +131,29 @@ void drawBox(uint16_t* imgBuf) {
   }
 }
 
-// カメラ画像取得時のコールバック関数
+// カメラ画像取得時のコールバック関数+ToF
 void CamCB(CamImage img) {
   if (!img.isAvailable()) {
     Serial.println("Image is not available. Try again");
     return;
+  }
+
+  // 3D ToFセンサ(MM-TOF10-IS)からデータを取得
+  d_flag = false;
+  MMToF10.get3d(ptr);
+
+  for (int j = 0; j < 8; j++){
+    for (int i = 0; i < 4; i++){
+      float distance = data[j][i];
+      printf("range[%d][%d] = %f [mm]\n", j, i, distance);
+      if(distance < THRESHOLD) {
+        d_flag = true;
+      }
+    }
+  }
+  
+  if(d_flag){
+    printf("センサの距離が閾値(%f [mm])未満の値を検出\n", THRESHOLD);
   }
 
   // 画像をクリップしてリサイズ
@@ -190,6 +208,11 @@ void CamCB(CamImage img) {
   drawBox(imgBuf);
   tft.drawRGBBitmap(0, 0, (uint16_t*)img.getImgBuff(), 320, 224);
   putStringOnLcd(gStrResult, ILI9341_YELLOW);
+
+  int usedMem, freeMem, largestFreeMem;
+  MP.GetMemoryInfo(usedMem, freeMem, largestFreeMem);
+  MPLog("Used:%4d [KB] / Free:%4d [KB] (Largest:%4d [KB])\n",
+  usedMem / 1024, freeMem / 1024, largestFreeMem / 1024);
 }
 
 // 初期設定
@@ -267,25 +290,4 @@ void setup() {
   theCamera.startStreaming(true, CamCB);
 }
 
-// ToF MM-TOF10-IS
-void loop() {
-  // 3D ToFセンサからデータを取得
-  d_flag = false;
-  MMToF10.get3d(ptr);
-
-  for (int j = 0; j < 8; j++){
-    for (int i = 0; i < 4; i++){
-      float distance = data[j][i];
-      printf("range[%d][%d] = %f [mm]\n", j, i, distance);
-      if(distance < THRESHOLD) {
-        d_flag = true;
-      }
-    }
-  }
-  
-  if(d_flag){
-    printf("センサの距離が閾値(%f [mm])未満の値を検出\n", THRESHOLD);
-  }
-  
-  delay(500);
-}
+void loop() {}
