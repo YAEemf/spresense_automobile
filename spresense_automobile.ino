@@ -20,6 +20,7 @@
  *  This library can only be used on the Spresense with the FCBGA chip package.
  */
 
+#include "MM-ToF10.h" // ToF Library developed by Interested-In-Spresense https://github.com/Interested-In-Spresense/MM-ToF10
 #include <Camera.h>
 #include <SPI.h>
 #include <EEPROM.h>
@@ -45,6 +46,7 @@ SDClass theSD;
 
 #define LINE_THICKNESS (5)
 #define BAUDRATE (115200)
+#define THRESHOLD 500.0f  //500mm
 
 Adafruit_ILI9341 tft = Adafruit_ILI9341(&SPI, TFT_DC, TFT_CS, TFT_RST);
 
@@ -53,6 +55,9 @@ DNNVariable input(3 * DNN_IMG_W * DNN_IMG_H);
 
 // const size_t SHM_SIZE = 1024 * 256;
 static uint8_t const label[2] = { 0, 1 };
+bool d_flag = false;
+static float data[8][4];
+float* ptr = (float*)data;
 
 // カメラエラーを表示する関数
 void printError(enum CamErr err)
@@ -163,7 +168,7 @@ void CamCB(CamImage img) {
 
   DNNVariable output = dnnrt.outputVariable(0);
   int index = output.maxIndex();
-  if (output[1] > 0.8) {
+  if (output[1] > 0.8 || d_flag) {
     Serial.println("L:0,R:0");  //RP2040 BLDC Driver Stop
   } else {
     //continue move BLDC
@@ -196,6 +201,9 @@ void setup() {
     }
   tft.begin();
   tft.setRotation(3);
+  MMToF10.begin();
+  MMToF10.sync();
+  MMToF10.nomal(ShortDistance,LowSpeed);
 
   CamErr err;
 
@@ -259,5 +267,25 @@ void setup() {
   theCamera.startStreaming(true, CamCB);
 }
 
-// メインループ
-void loop() {}
+// TOF
+void loop() {
+  // 3D TOFセンサからデータを取得
+  MMToF10.get3d(ptr);
+
+  // 2次元配列内の各値をチェックし、閾値未満なら flag を立てる
+  for(int j = 0; j < 8; j++){
+    for(int i = 0; i < 4; i++){
+      if(data[j][i] < THRESHOLD) {
+        d_flag = true;
+      }
+      printf("range[%d][%d] = %f [mm]\n", j, i, data[j][i]);
+    }
+  }
+
+  if(d_flag){
+    printf("警告: センサの距離が閾値(%f [mm])未満の値を検出しました！\n", THRESHOLD);
+  }
+  
+   printf("\n\n\n");
+   delay(500);
+}
